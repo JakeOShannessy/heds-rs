@@ -30,7 +30,7 @@ impl<VData> Heds<VData> {
     fn assert_valid(&self) {
         // Each face should have only 3 edges.
         for (_, face) in self.faces.iter() {
-            assert_eq!(face.all_edges(&self).len(), 3);
+            assert_eq!(face.all_edges(self).len(), 3);
         }
     }
 }
@@ -41,7 +41,7 @@ pub enum Location {
     OnEdge(HEdgeRef),
     OnFace(HFaceRef),
 }
-
+// TODO: it would be good to maintain the Delaunay property
 impl<VData> Heds<VData> {
     pub fn new() -> Self {
         Self {
@@ -54,10 +54,8 @@ impl<VData> Heds<VData> {
     // TODO: This has not yet been proved to be stable. It may also loop
     // inifintely, particularly with constrianed triangulations.
     pub fn locate(&self, point: Point) -> Option<Location> {
-        use rand::Rng;
         // There is always a zeroth edge if there are any.
         let mut e = HEdgeRef(0);
-        let mut rng = rand::thread_rng();
         let mut current_iterations = 0;
         let edge = loop {
             current_iterations += 1;
@@ -65,15 +63,38 @@ impl<VData> Heds<VData> {
                 panic!("locating failed for: {}", point);
             }
             let edge = *self.edges.get(e.0).unwrap();
-            let dest = *self.vertices.get(edge.vertex.0).unwrap();
-            // TODO: this will crash often
-            let pair = *self.edges.get(edge.pair.unwrap().0).unwrap();
-            let origin = *self.vertices.get(pair.vertex.0).unwrap();
-            // A random variable to determine if onext is tested first. If not
-            // it is tested second.
-            let onext_first: bool = rng.gen();
+            let dest = self.vertices.get(edge.vertex.0).unwrap();
+            let pair = self.edges.get(edge.pair.0).unwrap();
+            let origin = self.vertices.get(pair.vertex.0).unwrap();
             // If the point is on the destination edge we're looking at, use
             // that.
+            let next_next_pair = self
+                .edges
+                .get(
+                    self.edges
+                        .get(self.edges.get(e.0).unwrap().next.0)
+                        .unwrap()
+                        .next
+                        .0,
+                )
+                .unwrap()
+                .pair;
+            let next_pair = self
+                .edges
+                .get(self.edges.get(e.0).unwrap().next.0)
+                .unwrap()
+                .pair;
+            eprintln!("e[{:?}]: {:?}", e, self.edges.get(e.0));
+            eprintln!(
+                "next_next_pair[{:?}]: {:?}",
+                next_next_pair,
+                self.edges.get(next_next_pair.0)
+            );
+            eprintln!(
+                "next_pair[{:?}]: {:?}",
+                next_pair,
+                self.edges.get(next_pair.0)
+            );
             if point == dest.point {
                 break Some(Location::OnVertex(edge.vertex));
             } else if point == origin.point {
@@ -81,24 +102,24 @@ impl<VData> Heds<VData> {
                 // from the paper which just returns e.
                 break Some(Location::OnVertex(pair.vertex));
             } else if self.lies_right_strict(e, point) {
+                eprintln!("lies right of edge");
                 // If the point lies to the right, take the pair so that it lies
                 // to the left.
-                e = edge.pair.unwrap();
-            } else if onext_first {
-                let next = edge.next;
-                if !self.lies_right_strict(next, point) {
-                    e = next;
-                } else if !e.d_prev().lies_right_strict(point) {
-                    e = e.d_prev();
-                } else {
-                    break Some(e);
-                }
-            } else if !e.d_prev().lies_right_strict(point) {
-                e = e.d_prev();
-            } else if !e.onext().lies_right_strict(point) {
-                e = e.onext();
+                e = edge.pair;
+            } else if !self.lies_right_strict(next_next_pair, point) {
+                eprintln!("lies left of next_next_pair");
+                e = next_next_pair;
+            } else if !self.lies_right_strict(next_pair, point) {
+                eprintln!("lies left of next_pair");
+                e = next_pair;
             } else {
-                break Some(e);
+                eprintln!("breaking");
+                break if self.left_or_right(e, point) == Direction::Straight {
+                    Some(Location::OnEdge(e))
+                } else {
+                    let edge = self.edges.get(e.0).unwrap();
+                    break Some(Location::OnFace(edge.face?));
+                };
             }
         };
         edge
@@ -108,15 +129,18 @@ impl<VData> Heds<VData> {
     }
     pub fn lies_right(&self, e: HEdgeRef, point: Point) -> Lies {
         use Lies::*;
-        let edge = self.edges.get(e.0).unwrap();
-        let pair = self.edges.get(edge.pair.unwrap().0).unwrap();
-        let pa = self.vertices.get(edge.vertex.0).unwrap().point;
-        let pb = self.vertices.get(pair.vertex.0).unwrap().point;
-        match left_or_right(pa, pb, point) {
+        match self.left_or_right(e, point) {
             Direction::Right => Yes,
             Direction::Straight => On,
             Direction::Left => No,
         }
+    }
+    pub fn left_or_right(&self, e: HEdgeRef, point: Point) -> Direction {
+        let edge = self.edges.get(e.0).unwrap();
+        let pair = self.edges.get(self.edges.get(e.0).unwrap().pair.0).unwrap();
+        let pa = self.vertices.get(pair.vertex.0).unwrap().point;
+        let pb = self.vertices.get(edge.vertex.0).unwrap().point;
+        left_or_right(pa, pb, point)
     }
 }
 
@@ -161,23 +185,50 @@ pub fn left_or_right(
 impl<VData: Default> Heds<VData> {
     pub fn from_triangle_default(v1: Point, v2: Point, v3: Point) -> Self {
         let mut edges = Slab::new();
+        // A
         edges.insert(HEdge {
-            vertex: HVertexRef(0),
-            pair: None,
-            next: HEdgeRef(1),
-            face: HFaceRef(0),
+            // 0
+            vertex: HVertexRef(1),
+            pair: HEdgeRef(1),
+            next: HEdgeRef(2),
+            face: Some(HFaceRef(0)),
         });
         edges.insert(HEdge {
+            // 1
             vertex: HVertexRef(0),
-            pair: None,
-            next: HEdgeRef(1),
-            face: HFaceRef(0),
+            pair: HEdgeRef(0),
+            next: HEdgeRef(5),
+            face: None,
+        });
+        // B
+        edges.insert(HEdge {
+            // 2
+            vertex: HVertexRef(2),
+            pair: HEdgeRef(3),
+            next: HEdgeRef(4),
+            face: Some(HFaceRef(0)),
         });
         edges.insert(HEdge {
-            vertex: HVertexRef(0),
-            pair: None,
+            // 3
+            vertex: HVertexRef(1),
+            pair: HEdgeRef(2),
             next: HEdgeRef(1),
-            face: HFaceRef(0),
+            face: None,
+        });
+        // B
+        edges.insert(HEdge {
+            // 4
+            vertex: HVertexRef(0),
+            pair: HEdgeRef(5),
+            next: HEdgeRef(0),
+            face: Some(HFaceRef(0)),
+        });
+        edges.insert(HEdge {
+            // 5
+            vertex: HVertexRef(2),
+            pair: HEdgeRef(4),
+            next: HEdgeRef(3),
+            face: None,
         });
         let mut vertices = Slab::with_capacity(3);
         vertices.insert(HVertex {
@@ -208,6 +259,7 @@ impl<VData: Default> Heds<VData> {
     pub fn add_point_default(&mut self, mut point: Point) -> Option<HVertexRef> {
         point.snap();
         if let Some(location) = self.locate(point) {
+            eprintln!("Location: {:?}", location);
             match location {
                 Location::OnVertex(href) => Some(href),
                 Location::OnEdge(href) => Some(self.add_to_edge_default(href, point)),
@@ -239,53 +291,56 @@ impl<VData: Default> Heds<VData> {
             let edge_1 = self.edges.get_mut(edge_1_ref.0).unwrap();
             *edge_1 = HEdge {
                 vertex: vertex_ref,
-                pair: Some(edge_1b_ref),
-                face: face_1_ref,
+                pair: edge_1b_ref,
+                face: Some(face_1_ref),
                 next: edge_3b_ref,
             };
         }
         {
+            let old_edge_1_vertex = self.edges.get(old_edge_1.0).unwrap().vertex;
             let edge_1b = self.edges.get_mut(edge_1b_ref.0).unwrap();
             *edge_1b = HEdge {
-                vertex: HVertexRef(vertex_entry.key()),
-                pair: Some(edge_1_ref),
-                face: face_2_ref,
+                vertex: old_edge_1_vertex,
+                pair: edge_1_ref,
+                face: Some(face_2_ref),
                 next: old_edge_2,
             };
         }
         {
             let edge_2 = self.edges.get_mut(edge_2_ref.0).unwrap();
             *edge_2 = HEdge {
-                vertex: HVertexRef(vertex_entry.key()),
-                pair: Some(edge_2b_ref),
-                face: face_2_ref,
-                next: edge_2b_ref,
+                vertex: vertex_ref,
+                pair: edge_2b_ref,
+                face: Some(face_2_ref),
+                next: edge_1b_ref,
             };
         }
         {
+            let old_edge_2_vertex = self.edges.get(old_edge_2.0).unwrap().vertex;
             let edge_2b = self.edges.get_mut(edge_2b_ref.0).unwrap();
             *edge_2b = HEdge {
-                vertex: HVertexRef(vertex_entry.key()),
-                pair: Some(edge_2_ref),
-                face: face_3_ref,
+                vertex: old_edge_2_vertex,
+                pair: edge_2_ref,
+                face: Some(face_3_ref),
                 next: old_edge_3,
             };
         }
         {
             let edge_3 = self.edges.get_mut(edge_3_ref.0).unwrap();
             *edge_3 = HEdge {
-                vertex: HVertexRef(vertex_entry.key()),
-                pair: Some(edge_3b_ref),
-                face: face_3_ref,
+                vertex: vertex_ref,
+                pair: edge_3b_ref,
+                face: Some(face_3_ref),
                 next: edge_2b_ref,
             };
         }
         {
+            let old_edge_3_vertex = self.edges.get(old_edge_3.0).unwrap().vertex;
             let edge_3b = self.edges.get_mut(edge_3b_ref.0).unwrap();
             *edge_3b = HEdge {
-                vertex: HVertexRef(vertex_entry.key()),
-                pair: Some(edge_3_ref),
-                face: face_1_ref,
+                vertex: old_edge_3_vertex,
+                pair: edge_3_ref,
+                face: Some(face_1_ref),
                 next: old_edge_1,
             };
         }
@@ -300,16 +355,17 @@ impl<VData: Default> Heds<VData> {
         {
             let edge = self.edges.get_mut(old_edge_1.0).unwrap();
             edge.next = edge_1_ref;
+            eprintln!("old_edge_1: {:?}, next: {:?}", old_edge_1, edge.next);
         }
         {
             let edge = self.edges.get_mut(old_edge_2.0).unwrap();
             edge.next = edge_2_ref;
-            edge.face = face_2_ref;
+            edge.face = Some(face_2_ref);
         }
         {
             let edge = self.edges.get_mut(old_edge_3.0).unwrap();
             edge.next = edge_3_ref;
-            edge.face = face_3_ref;
+            edge.face = Some(face_3_ref);
         }
         vertex_entry.insert(HVertex {
             point,
@@ -320,14 +376,14 @@ impl<VData: Default> Heds<VData> {
     }
 
     /// Same as [`add_point_to_edge`] but does not check if the point is on one
-    /// of the vertices of the edge.
+    /// of the vertices of the edge. // TODO: can't handle bounding edges
     fn add_to_edge_default(&mut self, edge: HEdgeRef, point: Point) -> HVertexRef {
         let vertex_entry = self.vertices.vacant_entry();
 
         let vertex_ref = HVertexRef(vertex_entry.key());
 
         let edge_a_ref = edge;
-        let edge_b_ref = self.edges.get(edge_a_ref.0).unwrap().pair.unwrap();
+        let edge_b_ref = self.edges.get(edge_a_ref.0).unwrap().pair;
 
         let old_a_vertex = self.edges.get(edge_a_ref.0).unwrap().vertex;
         let old_b_vertex = self.edges.get(edge_b_ref.0).unwrap().vertex;
@@ -338,14 +394,12 @@ impl<VData: Default> Heds<VData> {
         let edge_bp_ref = HEdgeRef(self.edges.insert(Default::default()));
         let edge_c_ref = HEdgeRef(self.edges.insert(Default::default()));
         let edge_cp_ref = HEdgeRef(self.edges.insert(Default::default()));
-        let edge_d_ref = HEdgeRef(self.edges.insert(Default::default()));
-        let edge_dp_ref = HEdgeRef(self.edges.insert(Default::default()));
 
         {
             let edge_ap = self.edges.get_mut(edge_ap_ref.0).unwrap();
             edge_ap.vertex = old_b_vertex;
-            edge_ap.pair = Some(edge_a_ref);
-            edge_ap.face = face_3_ref;
+            edge_ap.pair = edge_a_ref;
+            edge_ap.face = Some(face_3_ref);
             edge_ap.next = edge_y_ref;
         }
 
@@ -357,59 +411,65 @@ impl<VData: Default> Heds<VData> {
 
         let face_1 = self.edges.get(edge_a_ref.0).unwrap().face;
         let face_2 = self.edges.get(edge_b_ref.0).unwrap().face;
+        let (edge_d_ref,edge_dp_ref) = if let Some(f2) = face_2 {
+            let edge_d_ref = HEdgeRef(self.edges.insert(Default::default()));
+            let edge_dp_ref = HEdgeRef(self.edges.insert(Default::default()));
+            (edge_d_ref,edge_dp_ref)
+        } else {
+            todo!()
+        };
         let face_4_ref = HFaceRef(self.faces.insert(Default::default()));
 
         {
             let edge_a = self.edges.get_mut(edge.0).unwrap();
             edge_a.vertex = vertex_ref;
-            edge_a.pair = Some(edge_ap_ref);
+            edge_a.pair = edge_ap_ref;
             edge_a.next = edge_cp_ref;
         }
-        // TODO: won't handle bounding edges
         {
             let edge_b = self.edges.get_mut(edge_b_ref.0).unwrap();
             edge_b.vertex = vertex_ref;
-            edge_b.pair = Some(edge_bp_ref);
+            edge_b.pair = edge_bp_ref;
             edge_b.next = edge_dp_ref;
         }
         {
             let edge_bp = self.edges.get_mut(edge_bp_ref.0).unwrap();
             edge_bp.vertex = old_a_vertex;
-            edge_bp.pair = Some(edge_b_ref);
-            edge_bp.face = face_4_ref;
+            edge_bp.pair = edge_b_ref;
+            edge_bp.face = Some(face_4_ref);
             edge_bp.next = edge_w_ref;
         }
         {
             let edge_c = self.edges.get_mut(edge_c_ref.0).unwrap();
             edge_c.vertex = vertex_ref;
-            edge_c.pair = Some(edge_cp_ref);
-            edge_c.face = face_4_ref;
+            edge_c.pair = edge_cp_ref;
+            edge_c.face = Some(face_4_ref);
             edge_c.next = edge_bp_ref;
         }
         {
             let edge_cp = self.edges.get_mut(edge_cp_ref.0).unwrap();
             edge_cp.vertex = edge_w_vertex;
-            edge_cp.pair = Some(edge_c_ref);
+            edge_cp.pair = edge_c_ref;
             edge_cp.face = face_1;
             edge_cp.next = edge_x_ref;
         }
         {
             let edge_d = self.edges.get_mut(edge_d_ref.0).unwrap();
             edge_d.vertex = vertex_ref;
-            edge_d.pair = Some(edge_dp_ref);
-            edge_d.face = face_3_ref;
+            edge_d.pair = edge_dp_ref;
+            edge_d.face = Some(face_3_ref);
             edge_d.next = edge_ap_ref;
         }
         {
             let edge_dp = self.edges.get_mut(edge_dp_ref.0).unwrap();
             edge_dp.vertex = edge_y_vertex;
-            edge_dp.pair = Some(edge_d_ref);
+            edge_dp.pair = edge_d_ref;
             edge_dp.face = face_2;
             edge_dp.next = edge_z_ref;
         }
         {
             let edge_w = self.edges.get_mut(edge_w_ref.0).unwrap();
-            edge_w.face = face_4_ref;
+            edge_w.face = Some(face_4_ref);
             edge_w.next = edge_c_ref;
         }
         {
@@ -419,7 +479,7 @@ impl<VData: Default> Heds<VData> {
         }
         {
             let edge_y = self.edges.get_mut(edge_y_ref.0).unwrap();
-            edge_y.face = face_3_ref;
+            edge_y.face = Some(face_3_ref);
             edge_y.next = edge_d_ref;
         }
         {
@@ -435,13 +495,11 @@ impl<VData: Default> Heds<VData> {
             let face_4 = self.faces.get_mut(face_4_ref.0).unwrap();
             face_4.edge = edge_w_ref;
         }
-
         vertex_entry.insert(HVertex {
             edge: edge_ap_ref,
             point,
             data: Default::default(),
         });
-
         vertex_ref
     }
 }
@@ -456,10 +514,10 @@ impl<VData> Default for Heds<VData> {
 pub struct HEdge {
     /// Vertex at the end of the half edge.
     pub vertex: HVertexRef,
-    /// Oppositely oriented adjacent half edge. None if it is a boundary.
-    pub pair: Option<HEdgeRef>,
-    /// Face the half edge borders.
-    pub face: HFaceRef,
+    /// Oppositely oriented adjacent half edge.
+    pub pair: HEdgeRef,
+    /// Face the half edge borders. None if it is an outside boundary edge.
+    pub face: Option<HFaceRef>,
     /// Next half edge around the face (CCW).
     pub next: HEdgeRef,
 }
@@ -495,6 +553,7 @@ impl HFace {
         edges.push(first_edge);
         let mut current_edge = first_edge;
         loop {
+            eprintln!("current_edge: {:?}", current_edge);
             let next_edge = heds.edges.get(current_edge.0).unwrap().next;
             if next_edge == first_edge {
                 break;
@@ -524,7 +583,7 @@ mod tests {
         let v3 = Point::new(5.0, 5.0);
         let heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
         assert_eq!(heds.vertices.len(), 3);
-        assert_eq!(heds.edges.len(), 3);
+        assert_eq!(heds.edges.len(), 6);
         assert_eq!(heds.faces.len(), 1);
     }
 
@@ -533,11 +592,83 @@ mod tests {
         let v1 = Point::new(0.0, 0.0);
         let v2 = Point::new(5.0, 0.0);
         let v3 = Point::new(5.0, 5.0);
-        let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
-        heds.add_to_face_default(HFaceRef(0), Point::new(5.0 * 2.0 / 3.0, 5.0 * 1.0 / 3.0));
-        assert_eq!(heds.vertices.len(), 4);
-        assert_eq!(heds.edges.len(), 9);
-        assert_eq!(heds.faces.len(), 3);
-        heds.assert_valid();
+        let mut v4 = Point::new(5.0 * 2.0 / 3.0, 5.0 * 1.0 / 3.0);
+        v4.snap();
+        let known = {
+            let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
+            assert_eq!(heds.locate(v4), Some(Location::OnFace(HFaceRef(0))));
+            heds.assert_valid();
+            heds.add_to_face_default(HFaceRef(0), v4);
+            for (i, edge) in heds.edges.iter() {
+                println!("[{}]: {:?}", i, edge);
+            }
+            assert_eq!(heds.vertices.len(), 4);
+            assert_eq!(heds.edges.len(), 12);
+            assert_eq!(heds.faces.len(), 3);
+            heds.assert_valid();
+            heds
+        };
+        let located = {
+            let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
+            heds.add_point_default(v4);
+            assert_eq!(heds.vertices.len(), 4);
+            assert_eq!(heds.edges.len(), 12);
+            assert_eq!(heds.faces.len(), 3);
+            heds.assert_valid();
+            heds
+        };
+        for (known, located) in known.vertices.iter().zip(located.vertices.iter()) {
+            assert_eq!(known, located);
+        }
+        for (known, located) in known.edges.iter().zip(located.edges.iter()) {
+            assert_eq!(known, located);
+        }
+        for (known, located) in known.faces.iter().zip(located.faces.iter()) {
+            assert_eq!(known, located);
+        }
+    }
+    #[test]
+    fn edge_insertion() {
+        let v1 = Point::new(0.0, 0.0);
+        let v2 = Point::new(5.0, 0.0);
+        let v3 = Point::new(5.0, 5.0);
+        let mut v4 = Point::new(2.5, 0.0);
+        v4.snap();
+        let known = {
+            let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
+            assert_eq!(heds.locate(v4), Some(Location::OnEdge(HEdgeRef(0))));
+            heds.assert_valid();
+            heds.add_to_edge_default(HEdgeRef(0), v4);
+            for (i, edge) in heds.edges.iter() {
+                println!("[{}]: {:?}", i, edge);
+            }
+            assert_eq!(heds.vertices.len(), 4);
+            assert_eq!(heds.edges.len(), 10);
+            assert_eq!(heds.faces.len(), 2);
+            heds.assert_valid();
+            heds
+        };
+        let located = {
+            let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
+            heds.assert_valid();
+            heds.add_point_default(v4);
+            for (i, edge) in heds.edges.iter() {
+                println!("[{}]: {:?}", i, edge);
+            }
+            assert_eq!(heds.vertices.len(), 4);
+            assert_eq!(heds.edges.len(), 10);
+            assert_eq!(heds.faces.len(), 2);
+            heds.assert_valid();
+            heds
+        };
+        for (known, located) in known.vertices.iter().zip(located.vertices.iter()) {
+            assert_eq!(known, located);
+        }
+        for (known, located) in known.edges.iter().zip(located.edges.iter()) {
+            assert_eq!(known, located);
+        }
+        for (known, located) in known.faces.iter().zip(located.faces.iter()) {
+            assert_eq!(known, located);
+        }
     }
 }
