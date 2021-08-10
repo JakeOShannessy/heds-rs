@@ -39,7 +39,11 @@ impl<VData> Heds<VData> {
             assert_eq!(face.all_edges(self).len(), 3);
         }
         // There should be at least one (outer) edge with a none face.
-        let (first_outer_i,first_outer) = self.edges.iter().find(|(i,edge)|edge.face.is_none()).expect("No outer edge found.");
+        let (first_outer_i, first_outer) = self
+            .edges
+            .iter()
+            .find(|(i, edge)| edge.face.is_none())
+            .expect("No outer edge found.");
         let first_outer_ref = HEdgeRef(first_outer_i);
         // We should be able to walk around the boundary and back to the first outer.
         {
@@ -50,7 +54,7 @@ impl<VData> Heds<VData> {
                     break;
                 }
                 let edge = self.get_edge(current_edge).unwrap();
-                assert_eq!(edge.face,None);
+                assert_eq!(edge.face, None);
                 current_edge = edge.next;
             }
         }
@@ -87,9 +91,23 @@ impl<VData> Heds<VData> {
         // There is always a zeroth edge if there are any.
         let mut e = HEdgeRef(0);
         let mut current_iterations = 0;
+        for edge_ref in self.edge_refs() {
+            let edge = self.get_edge(edge_ref).unwrap();
+            let pair = self.get_edge(edge.pair).unwrap();
+            let a = self.get_vertex(pair.vertex).unwrap();
+            let b = self.get_vertex(edge.vertex).unwrap();
+            eprintln!("[{:?}]: {} to {}", edge_ref, a.point, b.point);
+        }
         let edge = loop {
             current_iterations += 1;
             if current_iterations > 2000 {
+                for edge_ref in self.edge_refs() {
+                    let edge = self.get_edge(edge_ref).unwrap();
+                    let pair = self.get_edge(edge.pair).unwrap();
+                    let a = self.get_vertex(pair.vertex).unwrap();
+                    let b = self.get_vertex(edge.vertex).unwrap();
+                    eprintln!("[{:?}]: {} to {}", edge_ref, a.point, b.point);
+                }
                 panic!("locating failed for: {}", point);
             }
             let edge = *self.edges.get(e.0).unwrap();
@@ -137,10 +155,10 @@ impl<VData> Heds<VData> {
                 // to the left.
                 e = edge.pair;
             } else if !self.lies_right_strict(next_next_pair, point) {
-                eprintln!("lies left of next_next_pair");
+                eprintln!("lies not right of next_next_pair ({:?})",next_next_pair);
                 e = next_next_pair;
             } else if !self.lies_right_strict(next_pair, point) {
-                eprintln!("lies left of next_pair");
+                eprintln!("lies not right of next_pair ({:?})",next_pair);
                 e = next_pair;
             } else {
                 eprintln!("breaking");
