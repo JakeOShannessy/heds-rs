@@ -387,21 +387,12 @@ impl<VData: Default> Heds<VData> {
 
         let old_a_vertex = self.edges.get(edge_a_ref.0).unwrap().vertex;
         let old_b_vertex = self.edges.get(edge_b_ref.0).unwrap().vertex;
-        let face_3_ref = HFaceRef(self.faces.insert(Default::default()));
         let edge_y_ref = self.edges.get(edge_b_ref.0).unwrap().next;
 
         let edge_ap_ref = HEdgeRef(self.edges.insert(Default::default()));
         let edge_bp_ref = HEdgeRef(self.edges.insert(Default::default()));
         let edge_c_ref = HEdgeRef(self.edges.insert(Default::default()));
         let edge_cp_ref = HEdgeRef(self.edges.insert(Default::default()));
-
-        {
-            let edge_ap = self.edges.get_mut(edge_ap_ref.0).unwrap();
-            edge_ap.vertex = old_b_vertex;
-            edge_ap.pair = edge_a_ref;
-            edge_ap.face = Some(face_3_ref);
-            edge_ap.next = edge_y_ref;
-        }
 
         let edge_w_ref = self.edges.get(edge_a_ref.0).unwrap().next;
         let edge_w_vertex = self.edges.get(edge_w_ref.0).unwrap().vertex;
@@ -411,15 +402,50 @@ impl<VData: Default> Heds<VData> {
 
         let face_1 = self.edges.get(edge_a_ref.0).unwrap().face;
         let face_2 = self.edges.get(edge_b_ref.0).unwrap().face;
-        let (edge_d_ref,edge_dp_ref) = if let Some(f2) = face_2 {
+        let (face_3_ref, edge_dp_ref)= if face_2.is_some() {
             let edge_d_ref = HEdgeRef(self.edges.insert(Default::default()));
             let edge_dp_ref = HEdgeRef(self.edges.insert(Default::default()));
-            (edge_d_ref,edge_dp_ref)
+            let face_3_ref = HFaceRef(self.faces.insert(Default::default()));
+            {
+                let edge_d = self.edges.get_mut(edge_d_ref.0).unwrap();
+                edge_d.vertex = vertex_ref;
+                edge_d.pair = edge_dp_ref;
+                edge_d.face = Some(face_3_ref);
+                edge_d.next = edge_ap_ref;
+            }
+            {
+                let edge_dp = self.edges.get_mut(edge_dp_ref.0).unwrap();
+                edge_dp.vertex = edge_y_vertex;
+                edge_dp.pair = edge_d_ref;
+                edge_dp.face = face_2;
+                edge_dp.next = edge_z_ref;
+            }
+            {
+                let edge_y = self.edges.get_mut(edge_y_ref.0).unwrap();
+                edge_y.face = Some(face_3_ref);
+                edge_y.next = edge_d_ref;
+            }
+            {
+                let edge_z = self.edges.get_mut(edge_z_ref.0).unwrap();
+                edge_z.face = face_2;
+                edge_z.next = edge_b_ref;
+            }
+            {
+                let face_3 = self.faces.get_mut(face_3_ref.0).unwrap();
+                face_3.edge = edge_y_ref;
+            }
+            (Some(face_3_ref),edge_dp_ref)
         } else {
-            todo!()
+            (None, edge_ap_ref)
         };
         let face_4_ref = HFaceRef(self.faces.insert(Default::default()));
-
+        {
+            let edge_ap = self.edges.get_mut(edge_ap_ref.0).unwrap();
+            edge_ap.vertex = old_b_vertex;
+            edge_ap.pair = edge_a_ref;
+            edge_ap.face = face_3_ref;
+            edge_ap.next = edge_y_ref;
+        }
         {
             let edge_a = self.edges.get_mut(edge.0).unwrap();
             edge_a.vertex = vertex_ref;
@@ -454,20 +480,6 @@ impl<VData: Default> Heds<VData> {
             edge_cp.next = edge_x_ref;
         }
         {
-            let edge_d = self.edges.get_mut(edge_d_ref.0).unwrap();
-            edge_d.vertex = vertex_ref;
-            edge_d.pair = edge_dp_ref;
-            edge_d.face = Some(face_3_ref);
-            edge_d.next = edge_ap_ref;
-        }
-        {
-            let edge_dp = self.edges.get_mut(edge_dp_ref.0).unwrap();
-            edge_dp.vertex = edge_y_vertex;
-            edge_dp.pair = edge_d_ref;
-            edge_dp.face = face_2;
-            edge_dp.next = edge_z_ref;
-        }
-        {
             let edge_w = self.edges.get_mut(edge_w_ref.0).unwrap();
             edge_w.face = Some(face_4_ref);
             edge_w.next = edge_c_ref;
@@ -476,20 +488,6 @@ impl<VData: Default> Heds<VData> {
             let edge_x = self.edges.get_mut(edge_x_ref.0).unwrap();
             edge_x.face = face_1;
             edge_x.next = edge_a_ref;
-        }
-        {
-            let edge_y = self.edges.get_mut(edge_y_ref.0).unwrap();
-            edge_y.face = Some(face_3_ref);
-            edge_y.next = edge_d_ref;
-        }
-        {
-            let edge_z = self.edges.get_mut(edge_z_ref.0).unwrap();
-            edge_z.face = face_2;
-            edge_z.next = edge_b_ref;
-        }
-        {
-            let face_3 = self.faces.get_mut(face_3_ref.0).unwrap();
-            face_3.edge = edge_y_ref;
         }
         {
             let face_4 = self.faces.get_mut(face_4_ref.0).unwrap();
