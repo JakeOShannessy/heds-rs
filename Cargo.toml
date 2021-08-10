@@ -1,5 +1,5 @@
 [package]
-name = "heds-rs"
+name = "heds"
 version = "0.1.0"
 authors = ["Jake O'Shannessy <joshannessy@gmail.com>"]
 edition = "2018"

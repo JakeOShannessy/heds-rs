@@ -1,6 +1,10 @@
+use std::marker::PhantomData;
+
 use slab::Slab;
 mod point;
 pub use point::*;
+// mod surface_triangulation;
+// pub use surface_triangulation::*;
 
 /// Offset into the vertex array.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -28,9 +32,27 @@ pub struct Heds<VData> {
 impl<VData> Heds<VData> {
     #[cfg(test)]
     fn assert_valid(&self) {
+        use std::collections::HashSet;
+
         // Each face should have only 3 edges.
         for (_, face) in self.faces.iter() {
             assert_eq!(face.all_edges(self).len(), 3);
+        }
+        // There should be at least one (outer) edge with a none face.
+        let (first_outer_i,first_outer) = self.edges.iter().find(|(i,edge)|edge.face.is_none()).expect("No outer edge found.");
+        let first_outer_ref = HEdgeRef(first_outer_i);
+        // We should be able to walk around the boundary and back to the first outer.
+        {
+            // let mut visited_edges = HashSet::new();
+            let mut current_edge = first_outer.next;
+            loop {
+                if current_edge == first_outer_ref {
+                    break;
+                }
+                let edge = self.get_edge(current_edge).unwrap();
+                assert_eq!(edge.face,None);
+                current_edge = edge.next;
+            }
         }
     }
 }
@@ -49,6 +71,14 @@ impl<VData> Heds<VData> {
             vertices: Slab::new(),
             faces: Slab::new(),
         }
+    }
+
+    pub fn get_vertex(&self, v: HVertexRef) -> Option<&HVertex<VData>> {
+        self.vertices.get(v.0)
+    }
+
+    pub fn get_edge(&self, v: HEdgeRef) -> Option<&HEdge> {
+        self.edges.get(v.0)
     }
 
     // TODO: This has not yet been proved to be stable. It may also loop
@@ -141,6 +171,218 @@ impl<VData> Heds<VData> {
         let pa = self.vertices.get(pair.vertex.0).unwrap().point;
         let pb = self.vertices.get(edge.vertex.0).unwrap().point;
         left_or_right(pa, pb, point)
+    }
+    pub fn value_iter(&self) -> ValueIter<'_, VData> {
+        ValueIter::new(self)
+    }
+    pub fn faces(&self) -> FaceIter<'_, VData> {
+        FaceIter::new(self)
+    }
+    pub fn edges(&self) -> EdgeIter<'_, VData> {
+        EdgeIter::new(self)
+    }
+    pub fn edge_refs(&self) -> EdgeRefIter<'_, VData> {
+        EdgeRefIter::new(self)
+    }
+    pub fn vertices(&self) -> VertexIter<'_, VData> {
+        VertexIter::new(self)
+    }
+    pub fn triangles(&self) -> TriangleIter<'_, VData> {
+        TriangleIter::new(self)
+    }
+    pub fn triangle_vertices(&self) -> TriangleVerticesIter<'_, VData> {
+        TriangleVerticesIter::new(self)
+    }
+    pub fn vertices_mut(&mut self) -> VertexIterMut<'_, VData> {
+        VertexIterMut::new(self)
+    }
+}
+
+fn determinant_3x3(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64) -> f64 {
+    a * determinant_2x2(e, f, h, i) - b * determinant_2x2(d, f, g, i)
+        + c * determinant_2x2(d, e, g, h)
+}
+
+pub fn is_ccw(p1: Point, p2: Point, p3: Point) -> bool {
+    determinant_3x3(p1.x, p1.y, 1.0, p2.x, p2.y, 1.0, p3.x, p3.y, 1.0) > 0.0
+}
+
+fn determinant_2x2(a: f64, b: f64, c: f64, d: f64) -> f64 {
+    a * d - b * c
+}
+
+pub struct ValueIter<'a, T> {
+    v_iter: slab::Iter<'a, HVertex<T>>,
+}
+
+impl<'a, T> ValueIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            v_iter: heds.vertices.iter(),
+        }
+    }
+}
+
+impl<'a, T> Iterator for ValueIter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.v_iter.next().map(|x| &x.1.data)
+    }
+}
+
+pub struct FaceIter<'a, T> {
+    f_iter: slab::Iter<'a, HFace>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, T> FaceIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            f_iter: heds.faces.iter(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for FaceIter<'a, T> {
+    type Item = HFace;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.f_iter.next().map(|x| *x.1)
+    }
+}
+
+pub struct EdgeIter<'a, T> {
+    f_iter: slab::Iter<'a, HEdge>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, T> EdgeIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            f_iter: heds.edges.iter(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for EdgeIter<'a, T> {
+    type Item = HEdge;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.f_iter.next().map(|x| *x.1)
+    }
+}
+
+pub struct EdgeRefIter<'a, T> {
+    f_iter: slab::Iter<'a, HEdge>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, T> EdgeRefIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            f_iter: heds.edges.iter(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for EdgeRefIter<'a, T> {
+    type Item = HEdgeRef;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.f_iter.next().map(|x| HEdgeRef(x.0))
+    }
+}
+
+pub struct TriangleIter<'a, T> {
+    heds: &'a Heds<T>,
+    f_iter: slab::Iter<'a, HFace>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, T> TriangleIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            heds,
+            f_iter: heds.faces.iter(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for TriangleIter<'a, T> {
+    type Item = (HEdgeRef, HEdgeRef, HEdgeRef);
+    fn next(&mut self) -> Option<Self::Item> {
+        let face = self.f_iter.next().map(|x| *x.1)?;
+        Some(face.tri_edges(self.heds))
+    }
+}
+
+pub struct TriangleVerticesIter<'a, T> {
+    heds: &'a Heds<T>,
+    f_iter: slab::Iter<'a, HFace>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, T> TriangleVerticesIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            heds,
+            f_iter: heds.faces.iter(),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for TriangleVerticesIter<'a, T> {
+    type Item = [&'a HVertex<T>; 3];
+    fn next(&mut self) -> Option<Self::Item> {
+        let face = self.f_iter.next().map(|x| *x.1)?;
+        let (a, b, c) = face.tri_edges(self.heds);
+        let a = self.heds.get_edge(a).unwrap();
+        let b = self.heds.get_edge(b).unwrap();
+        let c = self.heds.get_edge(c).unwrap();
+        let a = self.heds.get_vertex(a.vertex).unwrap();
+        let b = self.heds.get_vertex(b.vertex).unwrap();
+        let c = self.heds.get_vertex(c.vertex).unwrap();
+        Some([a, b, c])
+    }
+}
+
+pub struct VertexIter<'a, T> {
+    f_iter: slab::Iter<'a, HVertex<T>>,
+}
+
+impl<'a, T> VertexIter<'a, T> {
+    pub fn new(heds: &'a Heds<T>) -> Self {
+        Self {
+            f_iter: heds.vertices.iter(),
+        }
+    }
+}
+
+impl<'a, T> Iterator for VertexIter<'a, T> {
+    type Item = &'a HVertex<T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.f_iter.next().map(|x| x.1)
+    }
+}
+
+pub struct VertexIterMut<'a, T> {
+    f_iter: slab::IterMut<'a, HVertex<T>>,
+}
+
+impl<'a, T> VertexIterMut<'a, T> {
+    pub fn new(heds: &'a mut Heds<T>) -> Self {
+        Self {
+            f_iter: heds.vertices.iter_mut(),
+        }
+    }
+}
+
+impl<'a, T> Iterator for VertexIterMut<'a, T> {
+    type Item = &'a mut HVertex<T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.f_iter.next().map(|x| x.1)
     }
 }
 
@@ -272,7 +514,7 @@ impl<VData: Default> Heds<VData> {
     }
 
     /// This function accounts for the point lying on an existing edge or point.
-    fn add_to_face_default(&mut self, face: HFaceRef, point: Point) -> HVertexRef {
+    pub fn add_to_face_default(&mut self, face: HFaceRef, point: Point) -> HVertexRef {
         let face_1_ref = face;
         let face = *self.faces.get(face.0).unwrap();
         let (old_edge_1, old_edge_2, old_edge_3) = face.tri_edges(self);
@@ -377,7 +619,9 @@ impl<VData: Default> Heds<VData> {
 
     /// Same as [`add_point_to_edge`] but does not check if the point is on one
     /// of the vertices of the edge. // TODO: can't handle bounding edges
-    fn add_to_edge_default(&mut self, edge: HEdgeRef, point: Point) -> HVertexRef {
+    pub fn add_to_edge_default(&mut self, edge: HEdgeRef, point: Point) -> HVertexRef {
+        #[cfg(test)]
+        self.assert_valid();
         let vertex_entry = self.vertices.vacant_entry();
 
         let vertex_ref = HVertexRef(vertex_entry.key());
@@ -402,7 +646,7 @@ impl<VData: Default> Heds<VData> {
 
         let face_1 = self.edges.get(edge_a_ref.0).unwrap().face;
         let face_2 = self.edges.get(edge_b_ref.0).unwrap().face;
-        let (face_3_ref, edge_dp_ref)= if face_2.is_some() {
+        let (face_3_ref, edge_dp_ref) = if face_2.is_some() {
             let edge_d_ref = HEdgeRef(self.edges.insert(Default::default()));
             let edge_dp_ref = HEdgeRef(self.edges.insert(Default::default()));
             let face_3_ref = HFaceRef(self.faces.insert(Default::default()));
@@ -434,7 +678,7 @@ impl<VData: Default> Heds<VData> {
                 let face_3 = self.faces.get_mut(face_3_ref.0).unwrap();
                 face_3.edge = edge_y_ref;
             }
-            (Some(face_3_ref),edge_dp_ref)
+            (Some(face_3_ref), edge_dp_ref)
         } else {
             (None, edge_ap_ref)
         };
@@ -498,6 +742,8 @@ impl<VData: Default> Heds<VData> {
             point,
             data: Default::default(),
         });
+        #[cfg(test)]
+        self.assert_valid();
         vertex_ref
     }
 }
@@ -631,7 +877,8 @@ mod tests {
         let v2 = Point::new(5.0, 0.0);
         let v3 = Point::new(5.0, 5.0);
         let mut v4 = Point::new(2.5, 0.0);
-        v4.snap();
+        let mut v5 = Point::new(3.0, 0.0);
+        v5.snap();
         let known = {
             let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
             assert_eq!(heds.locate(v4), Some(Location::OnEdge(HEdgeRef(0))));
@@ -646,7 +893,7 @@ mod tests {
             heds.assert_valid();
             heds
         };
-        let located = {
+        let mut located = {
             let mut heds = Heds::<f64>::from_triangle_default(v1, v2, v3);
             heds.assert_valid();
             heds.add_point_default(v4);
@@ -668,5 +915,7 @@ mod tests {
         for (known, located) in known.faces.iter().zip(located.faces.iter()) {
             assert_eq!(known, located);
         }
+        located.add_point_default(v5);
+        located.assert_valid();
     }
 }
